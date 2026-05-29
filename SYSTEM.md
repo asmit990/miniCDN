@@ -1,6 +1,9 @@
-## architecture
 
 ```
+╔══════════════════════════════════════════════════════════════════════════════════╗
+║                          MINI CDN — FULL SYSTEM                                  ║
+╚══════════════════════════════════════════════════════════════════════════════════╝
+
          DELHI USER          LONDON USER           NYC USER
              │                    │                    │
              │ HTTP GET           │ HTTP GET           │ HTTP GET
@@ -81,15 +84,12 @@
           │  port: 9000             │
           │  admin: 9001            │
           └─────────────────────────┘
-```
 
----
 
-## Cache Invalidation Flow
+╔══════════════════════════════════════════════════════════════════════════════════╗
+║                         CACHE INVALIDATION FLOW                                  ║
+╚══════════════════════════════════════════════════════════════════════════════════╝
 
-When a file is uploaded or deleted, the origin publishes a `PURGE` event to all edge nodes via Redis Pub/Sub, ensuring every cache stays consistent.
-
-```
   Admin uploads new logo.png
           │
           ▼
@@ -123,15 +123,12 @@ When a file is uploaded or deleted, the origin publishes a `PURGE` event to all 
                                               ▼
                                        fetch new version
                                        from origin ✓
-```
 
----
 
-## LRU Cache Internals
+╔══════════════════════════════════════════════════════════════════════════════════╗
+║                            LRU CACHE INTERNALS                                   ║
+╚══════════════════════════════════════════════════════════════════════════════════╝
 
-Each edge node maintains a 500 MB in-memory LRU cache backed by a HashMap and a Doubly Linked List. The most recently accessed item lives at the head; the least recently used is evicted from the tail when capacity is exceeded.
-
-```
    HASHMAP                        DOUBLY LINKED LIST
    ───────                        ──────────────────
                                   HEAD                          TAIL
@@ -139,43 +136,34 @@ Each edge node maintains a 500 MB in-memory LRU cache backed by a HashMap and a 
    "cat"   → ptr ────────────────────────► ↑
    "video" → ptr                     most recent        least recent
                                                          (evict this)
-```
 
-### GET "cat"
+   GET "cat":
+   ┌─────────────────────────────────────────────────┐
+   │  1. HashMap["cat"] → found ptr                  │
+   │  2. unlink [cat] from middle                    │
+   │  3. move [cat] to HEAD                          │
+   │  4. return bytes                                │
+   │                                                 │
+   │  BEFORE: [logo]⟷[cat]⟷[video]                  │
+   │  AFTER:  [cat]⟷[logo]⟷[video]                  │
+   └─────────────────────────────────────────────────┘
 
-```
-   1. HashMap["cat"] → found ptr
-   2. unlink [cat] from middle
-   3. move [cat] to HEAD
-   4. return bytes
+   SET new "bg.png" (cache full):
+   ┌─────────────────────────────────────────────────┐
+   │  1. insert [bg] at HEAD                         │
+   │  2. over capacity!                              │
+   │  3. evict TAIL = [video]                        │
+   │  4. delete HashMap["video"]                     │
+   │                                                 │
+   │  BEFORE: [logo]⟷[cat]⟷[video]  (full)          │
+   │  AFTER:  [bg]⟷[logo]⟷[cat]     (video gone)    │
+   └─────────────────────────────────────────────────┘
 
-   BEFORE: [logo]⟷[cat]⟷[video]
-   AFTER:  [cat]⟷[logo]⟷[video]
-```
 
-### SET new "bg.png" (cache full)
+╔══════════════════════════════════════════════════════════════════════════════════╗
+║                          REQUEST FLOW (HIT vs MISS)                              ║
+╚══════════════════════════════════════════════════════════════════════════════════╝
 
-```
-   1. insert [bg] at HEAD
-   2. over capacity!
-   3. evict TAIL = [video]
-   4. delete HashMap["video"]
-
-   BEFORE: [logo]⟷[cat]⟷[video]  (full)
-   AFTER:  [bg]⟷[logo]⟷[cat]     (video gone)
-```
-
----
-
-## Request Flow — Hit vs Miss
-
-| | Cache Hit | Cache Miss |
-|---|---|---|
-| **Latency** | ~2ms | ~300ms |
-| **Path** | RAM → Response | Origin → MinIO → LRU → Response |
-| **Deduplication** | — | `singleflight.Do()` coalesces concurrent misses |
-
-```
   CACHE HIT (~2ms)                    CACHE MISS (~300ms)
   ─────────────────                   ───────────────────
 
@@ -209,15 +197,12 @@ Each edge node maintains a 500 MB in-memory LRU cache backed by a HashMap and a 
                                           ▼
                                       all 1000 served
                                       ← 300ms
-```
 
----
 
-## Observability Layer
+╔══════════════════════════════════════════════════════════════════════════════════╗
+║                            OBSERVABILITY LAYER                                   ║
+╚══════════════════════════════════════════════════════════════════════════════════╝
 
-Each edge exposes a `/metrics` endpoint scraped by Prometheus every 5 seconds, with results visualised in a React dashboard.
-
-```
    Edge :8081/metrics          Edge :8082/metrics          Edge :8083/metrics
    ──────────────────          ──────────────────          ──────────────────
    cache_hits_total 10542      cache_hits_total 8821       cache_hits_total 9123
@@ -238,26 +223,19 @@ Each edge exposes a `/metrics` endpoint scraped by Prometheus every 5 seconds, w
                            ┌─────────────────────┐
                            │  REACT DASHBOARD     │
                            │                      │
-                           │  Hit Rate  [======] 91%   │
+                           │  Hit Rate  [======] 91%  │
                            │  Mumbai    [======] 94ms  │
                            │  London    [====  ] 87ms  │
-                           │  NYC       [===== ] 90ms  │
+                           │  NYC       [=====  ] 90ms  │
                            │  Evictions ↑ 342          │
                            │  Memory    486MB / 500MB  │
                            └─────────────────────┘
-```
 
----
 
-## Fault Tolerance
+╔══════════════════════════════════════════════════════════════════════════════════╗
+║                           FAULT TOLERANCE SCENARIOS                              ║
+╚══════════════════════════════════════════════════════════════════════════════════╝
 
-| Failure | Impact | Recovery |
-|---|---|---|
-| **Edge node dies** | Gateway detects via health check, reroutes to nearest live node | Node restarts and rejoins automatically |
-| **Redis dies** | Invalidation events are lost; caches continue serving | Stale files served until TTL expires |
-| **Origin dies** | Cache hits still served normally; misses return `502` | Cached files still served to all users |
-
-```
   IF EDGE DIES:            IF REDIS DIES:           IF ORIGIN DIES:
   ─────────────            ──────────────           ───────────────
 
@@ -271,4 +249,5 @@ Each edge exposes a `/metrics` endpoint scraped by Prometheus every 5 seconds, w
      │ Mumbai restarts     stale files              files? still
      ▼                     served until             served to
   back online ✓            TTL expires              millions) ✓
-```
+
+  ```
