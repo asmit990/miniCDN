@@ -1,0 +1,19 @@
+# Go
+edge/tmp/
+edge/*.exe
+edge/*.test
+
+# Node
+node_modules/
+dist/
+*.js.map
+
+# Env
+.env
+.env.local
+
+# OS
+.DS_Store
+
+# Go binary
+edge/edge
