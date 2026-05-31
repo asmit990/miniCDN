@@ -1,0 +1,144 @@
+version: "3.9"
+
+services:
+
+  # ─────────────────────────────
+  # INFRASTRUCTURE
+  # ─────────────────────────────
+
+  redis:
+    image: redis:alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - cdn-network
+
+  minio:
+    image: minio/minio
+    container_name: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - cdn-network
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - cdn-network
+
+  # ─────────────────────────────
+  # ORIGIN SERVER (TypeScript)
+  # ─────────────────────────────
+
+  origin:
+    build: ./origin
+    container_name: origin
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      - redis
+      - minio
+    networks:
+      - cdn-network
+
+  # ─────────────────────────────
+  # EDGE NODES (Go)
+  # ─────────────────────────────
+
+  edge-mumbai:
+    build: ./edge
+    container_name: edge-mumbai
+    ports:
+      - "8081:8081"
+    environment:
+      PORT: ":8081"
+      ORIGIN_URL: http://origin:3000
+      REDIS_URL: redis:6379
+    depends_on:
+      - origin
+      - redis
+    networks:
+      - cdn-network
+
+  edge-london:
+    build: ./edge
+    container_name: edge-london
+    ports:
+      - "8082:8082"
+    environment:
+      PORT: ":8082"
+      ORIGIN_URL: http://origin:3000
+      REDIS_URL: redis:6379
+    depends_on:
+      - origin
+      - redis
+    networks:
+      - cdn-network
+
+  edge-nyc:
+    build: ./edge
+    container_name: edge-nyc
+    ports:
+      - "8083:8083"
+    environment:
+      PORT: ":8083"
+      ORIGIN_URL: http://origin:3000
+      REDIS_URL: redis:6379
+    depends_on:
+      - origin
+      - redis
+    networks:
+      - cdn-network
+
+  # ─────────────────────────────
+  # API GATEWAY (TypeScript)
+  # ─────────────────────────────
+
+  gateway:
+    build: ./gateway
+    container_name: gateway
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: 8080
+      EDGE_IN: http://edge-mumbai:8081
+      EDGE_GB: http://edge-london:8082
+      EDGE_US: http://edge-nyc:8083
+    depends_on:
+      - edge-mumbai
+      - edge-london
+      - edge-nyc
+    networks:
+      - cdn-network
+
+# ─────────────────────────────
+# VOLUMES & NETWORKS
+# ─────────────────────────────
+
+volumes:
+  minio-data:
+
+networks:
+  cdn-network:
+    driver: bridge

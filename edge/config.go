@@ -1,4 +1,6 @@
 package main
+import "os"
+
 
 type Config struct {
 	Port      string
@@ -7,11 +9,27 @@ type Config struct {
 	RedisURL  string
 }
 
+
 func DefaultConfig() Config {
-	return Config{
-		Port:      ":8081",
-		CacheSize: 500 * 1024 * 1024,
-		OriginURL: "http://localhost:9000",
-		RedisURL:  "redis://localhost:6379",
-	}
+    port := os.Getenv("PORT")
+    if port == "" {
+        port = ":8081"
+    }
+
+    originURL := os.Getenv("ORIGIN_URL")
+    if originURL == "" {
+        originURL = "http://localhost:3000"
+    }
+
+    redisURL := os.Getenv("REDIS_URL")
+    if redisURL == "" {
+        redisURL = "localhost:6379"
+    }
+
+    return Config{
+        Port:      port,
+        CacheSize: 500 * 1024 * 1024,
+        OriginURL: originURL,
+        RedisURL:  redisURL,
+    }
 }
