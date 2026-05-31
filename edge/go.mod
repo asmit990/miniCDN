@@ -2,4 +2,14 @@ module edge
 
 go 1.24
 
-require golang.org/x/sync v0.7.0
+require (
+	github.com/redis/go-redis/v9 v9.20.0
+	golang.org/x/sync v0.13.0
+)
+
+require (
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/stretchr/testify v1.11.1 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
+	golang.org/x/sys v0.35.0 // indirect
+)
