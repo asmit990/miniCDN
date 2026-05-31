@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
-
   "scripts": {
     "dev": "ts-node src/index.ts",
     "build": "tsc",
@@ -23,6 +22,7 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
+    "@types/js-yaml": "^4.0.9",
     "axios": "^1.16.1",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
@@ -32,6 +32,7 @@
     "helmet": "^8.2.0",
     "http-proxy-middleware": "^4.0.0",
     "ioredis": "^5.11.0",
+    "js-yaml": "^4.1.1",
     "morgan": "^1.10.1",
     "redis": "^5.12.1"
   }

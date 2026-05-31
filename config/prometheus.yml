@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 5s   # har 5 second mein scrape karo
+
+scrape_configs:
+  - job_name: "edge-mumbai"
+    static_configs:
+      - targets: ["localhost:8081"]
+
+  - job_name: "edge-london"
+    static_configs:
+      - targets: ["localhost:8082"]
+
+  - job_name: "edge-nyc"
+    static_configs:
+      - targets: ["localhost:8083"]

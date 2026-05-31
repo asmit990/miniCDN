@@ -1,0 +1,23 @@
+regions:
+  IN:
+    name: Mumbai
+    edge_url: http://localhost:8081
+    fallback:
+      - GB
+      - US
+
+  GB:
+    name: London
+    edge_url: http://localhost:8082
+    fallback:
+      - US
+      - IN
+
+  US:
+    name: NYC
+    edge_url: http://localhost:8083
+    fallback:
+      - GB
+      - IN
+
+default_region: IN
