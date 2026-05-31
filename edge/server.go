@@ -7,6 +7,7 @@ import (
 	"strings"
 	"edge/cache"    
     "edge/origin"
+	"edge/invalidation"
 )
 
 
@@ -22,10 +23,16 @@ type Server struct {
 
 
 func NewServer(cfg Config) *Server {
-	return &Server{
-		cache: cache.NewCache(cfg.CacheSize),
-		config: cfg,
-	}
+    c := cache.NewCache(cfg.CacheSize)
+
+    // start Redis subscbr
+    // jab bhi PURGE aaye cache.Delete() call hoga yahan seee 
+    invalidation.StartSubscriber("localhost:6379", c)
+
+    return &Server{
+        cache:  c,
+        config: cfg,
+    }
 }
 
 
