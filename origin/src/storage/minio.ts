@@ -1,6 +1,5 @@
-import *  as Minio from "minio"
+import * as Minio from "minio"
 import config from "../config"
-
 
 const client = new Minio.Client({
   endPoint: config.minio.endPoint,
@@ -8,47 +7,49 @@ const client = new Minio.Client({
   useSSL: config.minio.useSSL,
   accessKey: config.minio.accessKey,
   secretKey: config.minio.secretKey,
-});
+})
 
-const BUSKET = config.minio.bucket
+const BUCKET = config.minio.bucket
 
-export async function initBusket() {
-    const exists = await client.bucketExists(BUSKET)
-    if(!exists) {
-        await client.makeBucket(BUSKET)
-        console.log(`Busket ${BUSKET} created`)
-
+export async function initBucket(retries = 5): Promise<void> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const exists = await client.bucketExists(BUCKET)
+      if (!exists) {
+        await client.makeBucket(BUCKET)
+        console.log(`Bucket "${BUCKET}" created`)
+      } else {
+        console.log(`Bucket "${BUCKET}" already exists`)
+      }
+      return
+    } catch (err) {
+      console.log(`MinIO not ready, retrying... (${i + 1}/${retries})`)
+      await new Promise(r => setTimeout(r, 3000))  // 3 second wait
     }
+  }
+  throw new Error("MinIO connection failed after retries")
 }
 
-
-export async function putObject( key: string,
+export async function putObject(
+  key: string,
   buffer: Buffer,
-  contentType: string) {
-      await client.putObject(BUSKET, key, buffer, buffer.length, {
+  contentType: string
+) {
+  await client.putObject(BUCKET, key, buffer, buffer.length, {
     "Content-Type": contentType,
   })
 }
 
-
 export async function getObject(key: string): Promise<Buffer> {
-    const stream = await client.getObject(BUSKET, key)
-    return new Promise((resolve, reject) => {
-        const chunks: Buffer[] = [] 
-        stream.on("data", (chunk) => {
-            chunks.push(chunk)
-        })
-
-        stream.on('end', () => {
-            resolve(Buffer.concat(chunks))
-        })
-
-        stream.on("error", reject)
-    })
+  const stream = await client.getObject(BUCKET, key)
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    stream.on("data", (chunk) => chunks.push(chunk))
+    stream.on("end", () => resolve(Buffer.concat(chunks)))
+    stream.on("error", reject)
+  })
 }
 
-
-
 export async function deleteObject(key: string) {
-  await client.removeObject(BUSKET, key)
+  await client.removeObject(BUCKET, key)
 }

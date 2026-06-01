@@ -24,7 +24,7 @@ type Cache interface {
 
 
 
-func StartSubscribe(redisURL string, cache Cache) {
+func StartSubscriber(redisURL string, cache Cache) {
 	ctx :=  context.Background()
 
 	client := redis.NewClient(&redis.Options{

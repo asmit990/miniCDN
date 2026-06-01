@@ -1,27 +1,24 @@
 import dotenv from "dotenv"
-import fs from "fs"
-import yaml from "js-yaml"
 dotenv.config()
-const regionsFile = fs.readFileSync("../config/regions.yml", "utf8")
-const regionsConfig = yaml.load(regionsFile) as any
 
 const config = {
-    port: process.env.PORT || 3000,
-    regions: regionsConfig.regions as Record<string, string>,
-    defaultRegion: regionsConfig.default_region as Record<string, string>,
-    redis: {
-       HOST: process.env.REDIS_HOST || "localhost",
-       PORT: parseInt(process.env.REDIS_PORT || "6379"),
+  port: process.env.PORT || 8080,
+  regions: {
+    IN: process.env.EDGE_IN || "http://edge-mumbai:8081",
+    GB: process.env.EDGE_GB || "http://edge-london:8082",
+    US: process.env.EDGE_US || "http://edge-nyc:8083",
+  } as Record<string, string>,
 
-    }, 
-    fallback: {
-      IN: ["IN", "GB", "US"],
-      US: ["US", "GB", "IN"],
-      GB: ["GB", "US", "IN"]
-    } as Record<string, string[]>,
+  fallback: {
+    IN: ["IN", "GB", "US"],
+    GB: ["GB", "US", "IN"],
+    US: ["US", "GB", "IN"],
+  } as Record<string, string[]>,
+
+  redis: {
+    HOST: process.env.REDIS_HOST || "redis",
+    PORT: parseInt(process.env.REDIS_PORT || "6379"),
+  },
 }
-
-
-
 
 export default config

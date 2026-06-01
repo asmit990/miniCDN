@@ -1,17 +1,11 @@
-package metrics 
-
-
+package metrics
 
 import (
-
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-
-
 var (
-
 	CacheHits = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "cdn_cache_hits_total",
 		Help: "Total cache hits",
@@ -27,7 +21,6 @@ var (
 		Help: "Total cache evictions",
 	})
 
-	// GAUGES — upar neeche jaate hain
 	CacheSizeBytes = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "cdn_cache_size_bytes",
 		Help: "Current cache size in bytes",
@@ -35,14 +28,13 @@ var (
 
 	CacheHitRate = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "cdn_cache_hit_rate",
-		Help: "Cache hit rate (hits / total requests)",
+		Help: "Cache hit rate",
 	})
 
 	ActiveConnections = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "cdn_active_connections",
-		Help: "Active connections right now",
+		Help: "Active connections",
 	})
-
 
 	OriginFetchDuration = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name:    "cdn_origin_fetch_duration_seconds",
@@ -57,28 +49,25 @@ var (
 	})
 )
 
+var totalHits float64
+var totalMisses float64
 
-
-
-
-func UpdateHitRate() {
-	hits := getCounterValue(CacheHits)
-	misses := getCounterValue(CacheMisses)
-	total := hits + misses
-
-	if total == 0 {
-		return 
-	}
-	CacheHitRate.Set(hits / total)
+func RecordHit() {
+	CacheHits.Inc()
+	totalHits++
+	updateRate()
 }
 
+func RecordMiss() {
+	CacheMisses.Inc()
+	totalMisses++
+	updateRate()
+}
 
-func getCounterValue(c prometheus.Counter) float64 {
-	ch := make(chan prometheus.Metric, 1)
-	c.Collect(ch)
-	m := <-ch
-	var dto dto.Metric
-	m.Write(&dto)
-	return dto.Counter.GetValue()
-
+func updateRate() {
+	total := totalHits + totalMisses
+	if total == 0 {
+		return
+	}
+	CacheHitRate.Set(totalHits / total)
 }
