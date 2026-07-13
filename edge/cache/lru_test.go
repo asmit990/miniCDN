@@ -50,14 +50,13 @@ func TestDelete(t *testing.T) {
 }
 
 func TestLRUOrder(t *testing.T) {
-    // a, b added. then a accessed. b should evict first
+  
     c := NewCache(10)
-    c.Set("a", []byte("12345"))  // 5 bytes
-    c.Set("b", []byte("12345"))  // 5 bytes
+    c.Set("a", []byte("12345"))  
+    c.Set("b", []byte("12345"))  
 
-    c.Get("a")                   // a becomes most recent
-
-    c.Set("c", []byte("12345"))  // b should evict, not a
+    c.Get("a")                 
+    c.Set("c", []byte("12345"))  
 
     _, aOk := c.Get("a")
     _, bOk := c.Get("b")
