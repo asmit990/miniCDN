@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express"
 import { getObject } from "../storage/minio"
+import { recordOriginFetch } from "../testing/originFetchCounter"
 
 const router = Router()
 
@@ -15,6 +16,11 @@ if (typeof fileParam !== "string") {
 }
 
   try {
+    recordOriginFetch()
+    const delay = Number(process.env.TEST_ORIGIN_FETCH_DELAY_MS || "0")
+    if (delay > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delay))
+    }
     const data = await getObject(fileParam)
     res.setHeader("Cache-Control", "public, max-age=3600")
     res.send(data)

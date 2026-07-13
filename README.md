@@ -230,6 +230,17 @@ cdn_cache_size_bytes 486539264
 cdn_evictions_total 3
 ```
 
+### Run integration tests
+
+Start the stack, then run the end-to-end suite:
+
+```bash
+docker compose up --build -d
+./scripts/integration_test.sh
+```
+
+The suite verifies cache MISS → HIT behavior, Redis invalidation after an overwrite on every edge, gateway failover when Mumbai is stopped, and that 50 concurrent misses result in one origin request.
+
 ---
 
 ## How Cache Invalidation Works
@@ -309,4 +320,3 @@ go test ./cache/... -v
 ## License
 
 MIT
-
