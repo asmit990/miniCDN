@@ -1,7 +1,7 @@
 import { Request, Response } from "express"
 import axios, { AxiosError } from "axios"
 import { detectRegion, pickEdge } from "./router"
-
+import { randomUUID } from "crypto"
 const EDGE_TIMEOUT_MS = 5000
 
 async function fetchWithRetry(
@@ -13,7 +13,7 @@ async function fetchWithRetry(
 
   if (!edgeURL) throw new Error("NO_EDGE_AVAILABLE")
 
-  // filepath param se path lo — gateway route: /file/*filepath
+
   const filepath = (req.params as any).filepath || ""
   const targetURL = `${edgeURL}/file/${filepath}`
 
@@ -24,7 +24,10 @@ async function fetchWithRetry(
       headers: {
         "x-forwarded-for": req.ip,
         "x-original-region": region,
+        "X-Request-ID": randomUUID()
+
       },
+
     })
 
     return {
@@ -74,13 +77,14 @@ export async function proxyRequest(req: Request, res: Response) {
     const { data, headers, status, region: servedBy } = await fetchWithRetry(req, region)
 
     const latency = Date.now() - startTime
-    res.set("X-Edge-Region",          servedBy)
-    res.set("X-Cache",                headers["x-cache"] || "UNKNOWN")
-    res.set("X-Response-Time",        `${latency}ms`)
-    res.set("Content-Type",           headers["content-type"] || "application/octet-stream")
-    res.set("Cache-Control",          "public, max-age=3600")
+    res.set("X-Edge-Region", servedBy)
+    res.set("X-Cache", headers["x-cache"] || "UNKNOWN")
+    res.set("X-Response-Time", `${latency}ms`)
+    res.set("Content-Type", headers["content-type"] || "application/octet-stream")
+    res.set("Cache-Control", "public, max-age=3600")
     res.set("X-Content-Type-Options", "nosniff")
-    res.set("X-Frame-Options",        "DENY")
+    res.set("X-Frame-Options", "DENY")
+
 
     console.log(`[OK] ${req.path} | region=${servedBy} | latency=${latency}ms | cache=${headers["x-cache"]}`)
     res.status(status).send(data)

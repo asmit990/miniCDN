@@ -1,8 +1,10 @@
 package cache 
 
 
-import "sync"
-
+import (
+    "sync"
+    "time"
+)
 
 type  Cache struct {
 	capacity int64
@@ -11,10 +13,12 @@ type  Cache struct {
 	head     *Node
 	tail     *Node
 	mu      sync.RWMutex
+    ttl     time.Duration
+    
 }
 
 
-func NewCache(capacity int64) *Cache {
+func NewCache(capacity int64, ttl time.Duration) *Cache {
     
 	 head := &Node{}
 	 tail := &Node{}
@@ -26,6 +30,7 @@ func NewCache(capacity int64) *Cache {
         items:    make(map[string]*Node),
         head:     head,
         tail:     tail,
+        ttl:      ttl,
 	}
 
 }
@@ -61,21 +66,26 @@ func (c *Cache) evict() {
 }
 
 
-func  (c *Cache) Get(key string) ([]byte, bool) {
+
+
+func (c *Cache) Get(key string) ([]byte, string, bool) {
 	c.mu.Lock()
-
-
 	defer c.mu.Unlock()
 
 	node, ok := c.items[key]
-
-
 	if !ok {
-		return nil, false
+		return nil, "", false
+	}
+
+	if time.Since(node.createdAt) > c.ttl {
+		c.removeNode(node)
+		delete(c.items, key)
+		c.used -= node.size
+		return nil, "", false
 	}
 
 	c.moveToFront(node)
-	return node.value, true
+	return node.value, node.etag, true
 }
 
 
@@ -91,6 +101,8 @@ func (c *Cache) Set(key string, value []byte) {
         c.used -= node.size
         node.value = value
         node.size = size
+        node.createdAt = time.Now()
+        node.computeETag()
         c.used += size
         c.moveToFront(node)
         return
@@ -98,7 +110,8 @@ func (c *Cache) Set(key string, value []byte) {
 
 
    
-    node := &Node{key: key, value: value, size: size}
+    node := &Node{key: key, value: value, size: size, createdAt: time.Now()}
+    node.computeETag()
     c.items[key] = node
     c.addToFront(node)
     c.used += size

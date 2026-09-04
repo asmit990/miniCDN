@@ -1,16 +1,15 @@
 package main
 
 import (
+	"edge/cache"
+	"edge/invalidation"
+	"edge/metrics"
+	"edge/origin"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
 	"time"
-
-	"edge/cache"
-	"edge/invalidation"
-	"edge/metrics"
-	"edge/origin"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -21,7 +20,7 @@ type Server struct {
 }
 
 func NewServer(cfg Config) *Server {
-	c := cache.NewCache(cfg.CacheSize)
+	c := cache.NewCache(cfg.CacheSize, 5*time.Minute)
 	invalidation.StartSubscriber(cfg.RedisURL, c)
 
 	return &Server{
@@ -41,26 +40,43 @@ func (s *Server) handleGetFile(w http.ResponseWriter, r *http.Request) {
 	metrics.ActiveConnections.Inc()
 	defer metrics.ActiveConnections.Dec()
 
+	requestId := r.Header.Get("X-Request-ID")
+	if requestId == "" {
+		requestId = "no-id"
+	}
+	w.Header().Set("X-Request-ID", requestId)
+
 	key := strings.TrimPrefix(r.URL.Path, "/file/")
 	if key == "" {
 		http.Error(w, "missing file key", http.StatusBadRequest)
 		return
 	}
 
+	acceptsGzip := strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
+
 	// cache hit
-	if data, ok := s.cache.Get(key); ok {
-		log.Printf("HIT  %s", key)
-		metrics.RecordHit()                                        
+	if data, etag, ok := s.cache.Get(key); ok {
+		log.Printf("HIT  %s | reqID=%s", key, requestId)
+		metrics.RecordHit()
 		metrics.CacheSizeBytes.Set(float64(s.cache.Used()))
+
 		w.Header().Set("X-Cache", "HIT")
-		w.Write(data)
+		w.Header().Set("ETag", etag)
+
+		// 304 Not Modified — client already has this version
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+
+		contentType := http.DetectContentType(data)
+		writeResponse(w, data, contentType, acceptsGzip)
 		metrics.RequestDuration.Observe(time.Since(start).Seconds())
 		return
 	}
 
-
-	log.Printf("MISS %s", key)
-	metrics.RecordMiss()                                             
+	log.Printf("MISS %s | reqID=%s", key, requestId)
+	metrics.RecordMiss()
 
 	fetchStart := time.Now()
 	data, err := origin.Fetch(s.config.OriginURL, key)
@@ -74,9 +90,32 @@ func (s *Server) handleGetFile(w http.ResponseWriter, r *http.Request) {
 	s.cache.Set(key, data)
 	metrics.CacheSizeBytes.Set(float64(s.cache.Used()))
 
+	// grab the computed etag from cache
+	_, etag, _ := s.cache.Get(key)
+
 	w.Header().Set("X-Cache", "MISS")
-	w.Write(data)
+	w.Header().Set("ETag", etag)
+
+	contentType := http.DetectContentType(data)
+	writeResponse(w, data, contentType, acceptsGzip)
 	metrics.RequestDuration.Observe(time.Since(start).Seconds())
+}
+
+func writeResponse(w http.ResponseWriter, data []byte, contentType string, acceptsGzip bool) {
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Vary", "Accept-Encoding")
+
+	if acceptsGzip && isCompressible(contentType) {
+		compressed, err := gzipCompress(data)
+		if err == nil {
+			w.Header().Set("Content-Encoding", "gzip")
+			w.Write(compressed)
+			return
+		}
+		log.Printf("gzip compression failed: %v", err)
+	}
+
+	w.Write(data)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
