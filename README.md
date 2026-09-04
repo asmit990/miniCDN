@@ -67,6 +67,215 @@ A distributed Content Delivery Network built from scratch — no CDN libraries, 
 
 ---
 
+
+
+``` mermaid 
+    
+    graph TB
+    subgraph Clients["Clients / Users"]
+        C1["Client (India)"]
+        C2["Client (UK / Europe)"]
+        C3["Client (US / Americas)"]
+    end
+
+    subgraph GatewayLayer["API Gateway (TypeScript / Express)"]
+        GW["API Gateway :8080<br/>• GeoIP Routing<br/>• Request Tracing (X-Request-ID)"]
+    end
+
+    subgraph EdgeLayer["Edge PoP Layer (Go)"]
+        subgraph EdgeMumbai["Edge Mumbai :8081"]
+            EM_LRU["LRU Cache + TTL"]
+            EM_ETag["ETag & 304 Validation"]
+            EM_CB["Circuit Breaker"]
+            EM_SF["Singleflight (Dedup)"]
+            EM_GZIP["Gzip Compression"]
+            EM_Warm["Cache Warmer"]
+        end
+
+        subgraph EdgeLondon["Edge London :8082"]
+            EL_LRU["LRU Cache + TTL"]
+            EL_CB["Circuit Breaker"]
+            EL_Warm["Cache Warmer"]
+        end
+
+        subgraph EdgeNYC["Edge NYC :8083"]
+            EN_LRU["LRU Cache + TTL"]
+            EN_CB["Circuit Breaker"]
+            EN_Warm["Cache Warmer"]
+        end
+    end
+
+    subgraph OriginLayer["Origin Server (TypeScript / Node.js) :3000"]
+        API_Fetch["GET /origin/:file(?v=n)"]
+        API_Upload["POST /upload"]
+        API_Admin["GET /admin/files<br/>GET /admin/versions/:file"]
+        VerModule["Versioning Module"]
+        PurgePub["Purge Publisher"]
+    end
+
+    subgraph StorageLayer["Data & Messaging Infrastructure"]
+        MinIO[("MinIO (S3 Object Storage) :9000<br/>• latest: file.ext<br/>• versioned: file.ext.v.timestamp")]
+        Redis[("Redis :6379<br/>• Pub/Sub: cdn:invalidation<br/>• Lists: versions:key")]
+        Prometheus["Prometheus Metrics :9090"]
+    end
+
+    %% Client to Gateway
+    C1 -->|HTTP Req| GW
+    C2 -->|HTTP Req| GW
+    C3 -->|HTTP Req| GW
+
+    %% Gateway to Edge
+    GW -->|Geo: IN| EdgeMumbai
+    GW -->|Geo: GB| EdgeLondon
+    GW -->|Geo: US| EdgeNYC
+
+    %% Edge to Origin & Redis
+    EM_CB -->|Cache Miss| API_Fetch
+    EL_CB -->|Cache Miss| API_Fetch
+    EN_CB -->|Cache Miss| API_Fetch
+
+    Redis -.->|PURGE Event Pub/Sub| EM_LRU
+    Redis -.->|PURGE Event Pub/Sub| EL_LRU
+    Redis -.->|PURGE Event Pub/Sub| EN_LRU
+
+    EM_Warm -->|Startup GET /admin/files| API_Admin
+
+    %% Origin internals
+    API_Upload --> VerModule
+    VerModule -->|1. Store latest & snapshot| MinIO
+    VerModule -->|2. RPUSH timestamp| Redis
+    API_Upload --> PurgePub
+    PurgePub -->|3. PUBLISH PURGE| Redis
+
+    API_Fetch -->|Read version metadata| Redis
+    API_Fetch -->|Fetch object data| MinIO
+
+    %% Metrics
+    EdgeMumbai -.->|Scrape /metrics| Prometheus
+
+```
+
+
+## Request Lifecycle
+``` mermaid 
+sequenceDiagram
+    autonumber
+    actor Client
+    participant GW as API Gateway
+    participant Edge as Edge Node (Go)
+    participant Origin as Origin (TypeScript)
+    participant Redis as Redis (ioredis)
+    participant MinIO as MinIO Storage
+
+    Client->>GW: GET /images/cat.png (If-None-Match: "etag123")
+    GW->>Edge: Route to nearest PoP (X-Request-ID attached)
+
+    alt Cache Hit (In Edge LRU)
+        Edge->>Edge: Check LRU Cache & TTL Expiry
+        alt ETag matches (If-None-Match)
+            Edge-->>Client: 304 Not Modified
+        else Content changed or fresh
+            Edge->>Edge: Gzip Compress (if Accept-Encoding: gzip)
+            Edge-->>Client: 200 OK (X-Cache: HIT)
+        end
+    else Cache Miss
+        Edge->>Edge: Singleflight (collapse duplicate concurrent requests)
+        Edge->>Edge: Check Circuit Breaker State (Closed / Open / Half-Open)
+        
+        alt Circuit Breaker is OPEN
+            Edge-->>Client: 503 Service Unavailable (Circuit Open)
+        else Circuit Breaker is CLOSED / HALF-OPEN
+            alt Request with ?v=1 (Versioned Fetch)
+                Edge->>Origin: GET /origin/cat.png?v=1
+                Origin->>Redis: LINDEX versions:cat.png (version - 1)
+                Redis-->>Origin: timestamp "1788535528543"
+                Origin->>MinIO: GET cat.png.v.1788535528543
+                MinIO-->>Origin: Binary data
+                Origin-->>Edge: 200 OK
+            else Normal Fetch (Latest)
+                Edge->>Origin: GET /origin/cat.png
+                Origin->>MinIO: GET cat.png
+                MinIO-->>Origin: Binary data
+                Origin-->>Edge: 200 OK
+            end
+
+            Edge->>Edge: Calculate MD5 ETag + Store in LRU
+            Edge->>Edge: Optional Gzip Encoding
+            Edge-->>Client: 200 OK (X-Cache: MISS)
+        end
+    end
+
+```
+## File Upload
+
+
+``` mermaid
+
+sequenceDiagram
+    autonumber
+    actor Admin as Admin / Content Publisher
+    participant Origin as Origin Server
+    participant MinIO as MinIO Storage
+    participant Redis as Redis
+    participant Edge as Edge Nodes
+
+    Admin->>Origin: POST /upload (file: cat.png)
+    Note over Origin: Generate Version Timestamp Date.now()
+
+    Origin->>MinIO: 1. Put latest "cat.png"
+    Origin->>MinIO: 2. Put snapshot "cat.png.v.<timestamp>"
+    MinIO-->>Origin: Stored successfully
+
+    Origin->>Redis: 3. RPUSH versions:cat.png <timestamp>
+    Redis-->>Origin: Stored in version list
+
+    Origin->>Redis: 4. PUBLISH cdn:invalidation {"key": "cat.png", "action": "PURGE"}
+    
+    par Edge Node Mumbai
+        Redis-->>Edge: Receive PURGE "cat.png"
+        Edge->>Edge: Evict "cat.png" from LRU Cache
+    and Edge Node London
+        Redis-->>Edge: Receive PURGE "cat.png"
+        Edge->>Edge: Evict "cat.png" from LRU Cache
+    and Edge Node NYC
+        Redis-->>Edge: Receive PURGE "cat.png"
+        Edge->>Edge: Evict "cat.png" from LRU Cache
+    end
+
+    Origin-->>Admin: 200 OK { key: "cat.png", version: timestamp }
+
+```
+
+## cache warming Lifecycle
+
+``` mermaid 
+
+sequenceDiagram
+    autonumber
+    participant Edge as Edge Node (Warmup Goroutine)
+    participant Origin as Origin Server (/admin/files)
+    participant MinIO as MinIO Storage
+
+    Note over Edge: Edge service boots up
+    Edge->>Edge: Launch go warmer.Warm() (non-blocking)
+    Edge->>Origin: GET /admin/files
+    Origin->>MinIO: List all objects in bucket
+    MinIO-->>Origin: ["cat.png", "logo.png", ...]
+    Origin-->>Edge: { files: [...], count: N }
+
+    loop For each file (up to maxFiles)
+        Edge->>Origin: GET /origin/<file>
+        Origin->>MinIO: Fetch object
+        MinIO-->>Origin: Binary data
+        Origin-->>Edge: 200 OK
+        Edge->>Edge: cache.Set(file, data)
+    end
+    Note over Edge: Cache Warmup Complete (0 cold start misses for hot files)
+
+
+```
+
+
 ## Tech Stack
 
 | Layer | Tech | Why |
