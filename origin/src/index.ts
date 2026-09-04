@@ -4,6 +4,7 @@ import { initBucket } from "./storage/minio"
 import uploadRouter from "./routes/upload"
 import fetchRouter from "./routes/fetch"
 import deleteRouter from "./routes/delete"
+import adminRouter from "./routes/admin"
 import {
   getOriginFetchCount,
   resetOriginFetchCount,
@@ -15,6 +16,7 @@ app.use(express.json())
 app.use(uploadRouter)
 app.use(fetchRouter)
 app.use(deleteRouter)
+app.use(adminRouter)
 
 app.get("/health", (req, res) => res.send("ok"))
 

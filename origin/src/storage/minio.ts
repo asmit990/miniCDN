@@ -30,9 +30,19 @@ export async function initBucket(retries = 5): Promise<void> {
   throw new Error("MinIO connection failed after retries")
 }
 
+export async function putVersionObject(key: string, buffer: Buffer | string, mimetype: string) {
+  const timeStamp = Date.now().toString()
+  await putObject(key, buffer, mimetype)
+
+  await putObject(`${key}.v.${timeStamp}`, buffer, mimetype);
+
+  return timeStamp;
+}
+
+
 export async function putObject(
   key: string,
-  buffer: Buffer,
+  buffer: Buffer | string,
   contentType: string
 ) {
   await client.putObject(BUCKET, key, buffer, buffer.length, {
@@ -52,4 +62,21 @@ export async function getObject(key: string): Promise<Buffer> {
 
 export async function deleteObject(key: string) {
   await client.removeObject(BUCKET, key)
+}
+
+
+export async function listObjects(): Promise<string[]> {
+
+  const keys: string[] = []
+  const stream = client.listObjects(BUCKET, "", true)
+  return new Promise((resolve, reject) => {
+    stream.on("data", (obj) => {
+      if (obj.name) keys.push(obj.name)
+    })
+    stream.on("end", () => resolve(keys))
+    stream.on("error", (err) => {
+      console.error("Error listing objects:", err)
+      reject(err)
+    })
+  })
 }
