@@ -14,13 +14,14 @@ redis.on("error", (err) => {
     console.error("Redis error:", err)
 })
 
-export async function publishPurge(key: string) {
+export async function publishPurge(key: string, action: string = "PURGE") {
     const message = JSON.stringify({
         key,
-        action: "PURGE"
+        action,
+        type: action,
     })
-    await redis.publish("cdn:invalidation", message,)
-    console.log(`PUBLISH PURGE ${message}`)
+    await redis.publish("cdn:invalidation", message)
+    console.log(`PUBLISH ${action} ${message}`)
 }
 
 

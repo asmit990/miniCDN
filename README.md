@@ -406,6 +406,9 @@ curl -H "X-Region: GB" http://localhost:8080/file/cat.png
 
 # NYC user → NYC edge
 curl -H "X-Region: US" http://localhost:8080/file/cat.png
+
+# Fetch historical version 1 (immutable CDN caching)
+curl -H "X-Region: IN" http://localhost:8080/file/cat.png?v=1
 ```
 
 ### Watch cache hit/miss

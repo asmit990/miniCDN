@@ -15,14 +15,22 @@ var cb = New(5, 30*time.Second)
 
 var errNotFound = errors.New("file not found")
 
-func Fetch(originURL string, key string) ([]byte, error) {
+func Fetch(originURL string, key string, version string) ([]byte, error) {
 	var fetchedBytes []byte
 	var notFound bool
 
-	result, err, _ := group.Do(key, func() (interface{}, error) {
+	fetchKey := key
+	if version != "" {
+		fetchKey = fmt.Sprintf("%s?v=%s", key, version)
+	}
+
+	result, err, _ := group.Do(fetchKey, func() (interface{}, error) {
 
 		cbErr := cb.Call(func() error {
 			url := fmt.Sprintf("%s/origin/%s", originURL, key)
+			if version != "" {
+				url = fmt.Sprintf("%s/origin/%s?v=%s", originURL, key, version)
+			}
 
 			resp, err := http.Get(url)
 			if err != nil {
@@ -39,6 +47,10 @@ func Fetch(originURL string, key string) ([]byte, error) {
 				return fmt.Errorf("origin server error: %d", resp.StatusCode)
 			}
 
+			if resp.StatusCode >= 400 {
+				return fmt.Errorf("origin returned status %d", resp.StatusCode)
+			}
+
 			bytes, err := io.ReadAll(resp.Body)
 			if err != nil {
 				return err
@@ -53,6 +65,9 @@ func Fetch(originURL string, key string) ([]byte, error) {
 		}
 
 		if notFound {
+			if version != "" {
+				return nil, fmt.Errorf("file not found: %s (version %s)", key, version)
+			}
 			return nil, fmt.Errorf("file not found: %s", key)
 		}
 

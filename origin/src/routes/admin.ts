@@ -7,7 +7,8 @@ const router = Router()
 router.get("/admin/files", async (req: Request, res: Response) => {
     try {
         const keys = await listObjects()
-        res.json({ files: keys, count: keys.length })
+        const files = keys.filter(key => !key.includes(".v."))
+        res.json({ files, count: files.length })
     } catch (error) {
         console.error("Error fetching files:", error)
         res.status(500).json({ error: "Failed to fetch files" })
@@ -18,7 +19,8 @@ router.get("/admin/files", async (req: Request, res: Response) => {
 router.get("/files", async (req: Request, res: Response) => {
     try {
         const keys = await listObjects()
-        res.json({ files: keys, count: keys.length })
+        const files = keys.filter(key => !key.includes(".v."))
+        res.json({ files, count: files.length })
     } catch (error) {
         console.error("Error fetching files:", error)
         res.status(500).json({ error: "Failed to fetch files" })

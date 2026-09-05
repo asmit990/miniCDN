@@ -15,7 +15,9 @@ async function fetchWithRetry(
 
 
   const filepath = (req.params as any).filepath || ""
-  const targetURL = `${edgeURL}/file/${filepath}`
+  const queryIndex = req.url.indexOf("?")
+  const queryString = queryIndex !== -1 ? req.url.slice(queryIndex) : ""
+  const targetURL = `${edgeURL}/file/${filepath}${queryString}`
 
   try {
     const response = await axios.get(targetURL, {
@@ -71,7 +73,8 @@ export async function proxyRequest(req: Request, res: Response) {
   }
 
   const region = detectRegion(req)
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} | region=${region} | ip=${req.ip}`)
+  const fullPath = req.originalUrl || req.url
+  console.log(`[${new Date().toISOString()}] ${req.method} ${fullPath} | region=${region} | ip=${req.ip}`)
 
   try {
     const { data, headers, status, region: servedBy } = await fetchWithRetry(req, region)
@@ -80,13 +83,19 @@ export async function proxyRequest(req: Request, res: Response) {
     res.set("X-Edge-Region", servedBy)
     res.set("X-Cache", headers["x-cache"] || "UNKNOWN")
     res.set("X-Response-Time", `${latency}ms`)
+    if (headers["x-version"]) {
+      res.set("X-Version", headers["x-version"])
+    }
+    if (headers["etag"]) {
+      res.set("ETag", headers["etag"])
+    }
     res.set("Content-Type", headers["content-type"] || "application/octet-stream")
-    res.set("Cache-Control", "public, max-age=3600")
+    res.set("Cache-Control", headers["cache-control"] || (req.query.v ? "public, max-age=31536000, immutable" : "public, max-age=3600"))
     res.set("X-Content-Type-Options", "nosniff")
     res.set("X-Frame-Options", "DENY")
 
 
-    console.log(`[OK] ${req.path} | region=${servedBy} | latency=${latency}ms | cache=${headers["x-cache"]}`)
+    console.log(`[OK] ${fullPath} | region=${servedBy} | latency=${latency}ms | cache=${headers["x-cache"]}`)
     res.status(status).send(data)
 
   } catch (err: any) {

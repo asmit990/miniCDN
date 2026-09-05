@@ -46,22 +46,35 @@ func (s *Server) handleGetFile(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("X-Request-ID", requestId)
 
-	key := strings.TrimPrefix(r.URL.Path, "/file/")
-	if key == "" {
+	rawKey := strings.TrimPrefix(r.URL.Path, "/file/")
+	if rawKey == "" {
 		http.Error(w, "missing file key", http.StatusBadRequest)
 		return
+	}
+
+	version := r.URL.Query().Get("v")
+	cacheKey := rawKey
+	if version != "" {
+		cacheKey = fmt.Sprintf("%s?v=%s", rawKey, version)
 	}
 
 	acceptsGzip := strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
 
 	// cache hit
-	if data, etag, ok := s.cache.Get(key); ok {
-		log.Printf("HIT  %s | reqID=%s", key, requestId)
+	if data, etag, ok := s.cache.Get(cacheKey); ok {
+		log.Printf("HIT  %s | reqID=%s", cacheKey, requestId)
 		metrics.RecordHit()
 		metrics.CacheSizeBytes.Set(float64(s.cache.Used()))
 
 		w.Header().Set("X-Cache", "HIT")
 		w.Header().Set("ETag", etag)
+		if version != "" {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			w.Header().Set("X-Version", version)
+		} else {
+			w.Header().Set("Cache-Control", "public, max-age=3600")
+			w.Header().Set("X-Version", "latest")
+		}
 
 		// 304 Not Modified — client already has this version
 		if r.Header.Get("If-None-Match") == etag {
@@ -75,26 +88,33 @@ func (s *Server) handleGetFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("MISS %s | reqID=%s", key, requestId)
+	log.Printf("MISS %s | reqID=%s", cacheKey, requestId)
 	metrics.RecordMiss()
 
 	fetchStart := time.Now()
-	data, err := origin.Fetch(s.config.OriginURL, key)
+	data, err := origin.Fetch(s.config.OriginURL, rawKey, version)
 	metrics.OriginFetchDuration.Observe(time.Since(fetchStart).Seconds())
 
 	if err != nil {
-		http.Error(w, fmt.Sprintf("file not found: %s", key), http.StatusNotFound)
+		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
 
-	s.cache.Set(key, data)
+	s.cache.Set(cacheKey, data)
 	metrics.CacheSizeBytes.Set(float64(s.cache.Used()))
 
 	// grab the computed etag from cache
-	_, etag, _ := s.cache.Get(key)
+	_, etag, _ := s.cache.Get(cacheKey)
 
 	w.Header().Set("X-Cache", "MISS")
 	w.Header().Set("ETag", etag)
+	if version != "" {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		w.Header().Set("X-Version", version)
+	} else {
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		w.Header().Set("X-Version", "latest")
+	}
 
 	contentType := http.DetectContentType(data)
 	writeResponse(w, data, contentType, acceptsGzip)

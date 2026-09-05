@@ -56,7 +56,7 @@ func (w *warm) Warm() {
 			break
 		}
 
-		fileURL := fmt.Sprintf("%s/%s", w.originURL, filename)
+		fileURL := fmt.Sprintf("%s/origin/%s", w.originURL, filename)
 		fileRes, err := http.Get(fileURL)
 		if err != nil {
 			log.Printf("failed to fetch %s: %v", filename, err)

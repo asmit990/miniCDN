@@ -55,6 +55,29 @@ func TestDelete(t *testing.T) {
 	}
 }
 
+func TestDeleteWithPrefix(t *testing.T) {
+	c := NewCache(1024, 5*time.Second)
+	c.Set("cat.png", []byte("latest"))
+	c.Set("cat.png?v=1", []byte("version1"))
+	c.Set("cat.png?v=2", []byte("version2"))
+	c.Set("dog.png", []byte("dog"))
+
+	c.DeleteWithPrefix("cat.png")
+
+	if _, _, ok := c.Get("cat.png"); ok {
+		t.Fatal("cat.png should have been deleted")
+	}
+	if _, _, ok := c.Get("cat.png?v=1"); ok {
+		t.Fatal("cat.png?v=1 should have been deleted")
+	}
+	if _, _, ok := c.Get("cat.png?v=2"); ok {
+		t.Fatal("cat.png?v=2 should have been deleted")
+	}
+	if _, _, ok := c.Get("dog.png"); !ok {
+		t.Fatal("dog.png should NOT have been deleted")
+	}
+}
+
 func TestLRUOrder(t *testing.T) {
 
 	c := NewCache(10, 5*time.Second)

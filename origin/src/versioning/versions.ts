@@ -37,3 +37,11 @@ export const getTimestamp = getVersionTimestamp
 export async function getLatestVersion(key: string): Promise<string | null> {
     return await redis.lindex(`versions:${key}`, -1)
 }
+
+export async function deleteVersions(key: string): Promise<number> {
+    return await redis.del(`versions:${key}`)
+}
+
+export async function removeVersion(key: string, timestamp: string): Promise<number> {
+    return await redis.lrem(`versions:${key}`, 0, timestamp)
+}

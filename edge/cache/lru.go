@@ -2,6 +2,7 @@ package cache
 
 
 import (
+    "strings"
     "sync"
     "time"
 )
@@ -139,6 +140,19 @@ func (c *Cache) Delete(key string) {
     c.removeNode(node)
     delete(c.items, key)
     c.used -= node.size
+}
+
+func (c *Cache) DeleteWithPrefix(prefix string) {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+
+    for k, node := range c.items {
+        if k == prefix || strings.HasPrefix(k, prefix+"?") {
+            c.removeNode(node)
+            delete(c.items, k)
+            c.used -= node.size
+        }
+    }
 }
 
 
