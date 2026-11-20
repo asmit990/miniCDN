@@ -9,14 +9,16 @@ const redis = new Redis({
 
 
 const WINDOW_SECOND = 60 * 1000
-const MAX_REQUESTS = 100
+const MAX_REQUESTS = parseInt(process.env.RATE_LIMIT_MAX || "100", 10)
 
 export async function rateLimiter(
     req: Request,
     res: Response,
     next: NextFunction
 ) {
-   const ip = req.ip || req.header("x-forwarded-for") || req.connection.remoteAddress
+   const xff = req.headers["x-forwarded-for"]
+   const forwardedIp = typeof xff === "string" ? xff.split(",")[0].trim() : Array.isArray(xff) ? xff[0] : null
+   const ip = forwardedIp || req.ip || (req.socket && req.socket.remoteAddress) || "127.0.0.1"
    const now = Date.now()
    const key = `ratelimits this ${ip}`
 

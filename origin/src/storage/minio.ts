@@ -64,6 +64,11 @@ export async function deleteObject(key: string) {
   await client.removeObject(BUCKET, key)
 }
 
+export async function statObject(key: string): Promise<Minio.BucketItemStat> {
+  return await client.statObject(BUCKET, key)
+}
+
+
 
 export async function listObjects(): Promise<string[]> {
 

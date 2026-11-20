@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
 # End-to-end integration test for CDN versioning across Gateway, Edge, and Origin.
-# Run after `docker compose up --build -d` from repository root.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -95,7 +94,16 @@ body_v3="$(curl --silent --show-error --fail "http://localhost:8080/file/$TEST_K
 v1_cache_after="$(header_val "x-cache" "http://localhost:8080/file/$TEST_KEY?v=1")"
 [[ "$v1_cache_after" == "HIT" ]] || fail "expected ?v=1 to remain cached (HIT), got '$v1_cache_after'"
 
-echo "=== 9. Full File Deletion & Cache Flush ==="
+echo "=== 9. Rollback to Version 1 ==="
+rollback_res="$(curl --silent --show-error --fail -X POST "http://localhost:3000/admin/rollback/$TEST_KEY?v=1")"
+echo "Rollback response: $rollback_res"
+sleep 1 # allow Redis Pub/Sub invalidation to propagate
+
+# Root unversioned fetch should now reflect restored payload-version-1
+body_rolled_back="$(curl --silent --show-error --fail "http://localhost:8080/file/$TEST_KEY")"
+[[ "$body_rolled_back" == "payload-version-1" ]] || fail "expected rolled back body 'payload-version-1', got '$body_rolled_back'"
+
+echo "=== 10. Full File Deletion & Cache Flush ==="
 curl --silent --show-error --fail -X DELETE "http://localhost:3000/file/$TEST_KEY" >/dev/null
 sleep 1 # allow DELETE broadcast
 
@@ -103,4 +111,4 @@ sleep 1 # allow DELETE broadcast
 status="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://localhost:8080/file/$TEST_KEY")"
 [[ "$status" == "404" ]] || fail "expected 404 after file deletion, got $status"
 
-echo "PASS: End-to-end versioning, caching, invalidation, and cleanup verified successfully!"
+echo "PASS: End-to-end versioning, caching, invalidation, rollback, and cleanup verified successfully!"

@@ -6,9 +6,9 @@ import { proxyRequest } from "./proxy"
 
 const app = express()
 
-app.use(rateLimiter)
-
 app.get("/health", (req, res) => res.send("gateway ok"))
+
+app.use(rateLimiter)
 
 // Express 5 wildcard syntax
 app.get("/file/*filepath", proxyRequest)

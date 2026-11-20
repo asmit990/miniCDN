@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
 
   # ─────────────────────────────
@@ -15,7 +13,7 @@ services:
       - cdn-network
 
   minio:
-    image: minio/minio
+    image: pgsty/minio:latest
     container_name: minio
     ports:
       - "9000:9000"

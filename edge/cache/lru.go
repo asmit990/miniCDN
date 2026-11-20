@@ -1,174 +1,181 @@
-package cache 
-
+package cache
 
 import (
-    "strings"
-    "sync"
-    "time"
+	"strings"
+	"sync"
+	"time"
 )
 
-type  Cache struct {
-	capacity int64
-	used     int64
-	items    map[string]*Node
-	head     *Node
-	tail     *Node
-	mu      sync.RWMutex
-    ttl     time.Duration
-    
+type Cache struct {
+	capacity      int64
+	used          int64
+	items         map[string]*Node
+	head          *Node
+	tail          *Node
+	mu            sync.RWMutex
+	ttl           time.Duration
+	staleDuration time.Duration
 }
 
+type ItemState int
 
-func NewCache(capacity int64, ttl time.Duration) *Cache {
-    
-	 head := &Node{}
-	 tail := &Node{}
-	 head.next = tail 
-	 tail.prev = head
+const (
+	StateMiss ItemState = iota
+	StateFresh
+	StateStale
+)
+
+func NewCache(capacity int64, ttl time.Duration, staleDuration ...time.Duration) *Cache {
+
+	head := &Node{}
+	tail := &Node{}
+	head.next = tail
+	tail.prev = head
+
+	stale := 1 * time.Minute
+	if len(staleDuration) > 0 {
+		stale = staleDuration[0]
+	}
 
 	return &Cache{
-        capacity: capacity,
-        items:    make(map[string]*Node),
-        head:     head,
-        tail:     tail,
-        ttl:      ttl,
+		capacity:      capacity,
+		items:         make(map[string]*Node),
+		head:          head,
+		tail:          tail,
+		ttl:           ttl,
+		staleDuration: stale,
 	}
 
 }
 
-
 func (c *Cache) addToFront(node *Node) {
-    node.next = c.head.next
-    node.prev = c.head
-    c.head.next.prev = node
-    c.head.next = node
+	node.next = c.head.next
+	node.prev = c.head
+	c.head.next.prev = node
+	c.head.next = node
 }
-
 
 func (c *Cache) removeNode(node *Node) {
 	node.prev.next = node.next
-    node.next.prev = node.prev
+	node.next.prev = node.prev
 
 }
-
 
 func (c *Cache) moveToFront(node *Node) {
-    c.removeNode(node)
-    c.addToFront(node)
+	c.removeNode(node)
+	c.addToFront(node)
 
 }
-
 
 func (c *Cache) evict() {
-    lru := c.tail.prev     
-    c.removeNode(lru)
-    delete(c.items, lru.key)
-    c.used -= lru.size
+	lru := c.tail.prev
+	c.removeNode(lru)
+	delete(c.items, lru.key)
+	c.used -= lru.size
 }
 
+func (c *Cache) Set(key string, value []byte) {
 
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
+	size := int64(len(value))
+	// key hai ya nahi
+	if node, ok := c.items[key]; ok {
+		c.used -= node.size
+		node.value = value
+		node.size = size
+		node.createdAt = time.Now()
+		node.computeETag()
+		c.used += size
+		c.moveToFront(node)
+		return
+	}
 
-func (c *Cache) Get(key string) ([]byte, string, bool) {
+	node := &Node{key: key, value: value, size: size, createdAt: time.Now()}
+	node.computeETag()
+	c.items[key] = node
+	c.addToFront(node)
+	c.used += size
+
+	for c.used > c.capacity {
+		c.evict()
+
+	}
+
+}
+
+func (c *Cache) Delete(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	node, ok := c.items[key]
 	if !ok {
-		return nil, "", false
+		return
 	}
 
-	if time.Since(node.createdAt) > c.ttl {
-		c.removeNode(node)
-		delete(c.items, key)
-		c.used -= node.size
-		return nil, "", false
-	}
-
-	c.moveToFront(node)
-	return node.value, node.etag, true
-}
-
-
-
-func (c *Cache) Set(key string, value []byte) {
- 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	size := int64(len(value))
-    // key hai ya nahi
-        if node, ok := c.items[key]; ok {
-        c.used -= node.size
-        node.value = value
-        node.size = size
-        node.createdAt = time.Now()
-        node.computeETag()
-        c.used += size
-        c.moveToFront(node)
-        return
-    }
-
-
-   
-    node := &Node{key: key, value: value, size: size, createdAt: time.Now()}
-    node.computeETag()
-    c.items[key] = node
-    c.addToFront(node)
-    c.used += size
-
-
-	for c.used > c.capacity {
-       c.evict()
-
-	}
-
-
-
-}
-
-
-func (c *Cache) Delete(key string) {
-    c.mu.Lock()
-    defer c.mu.Unlock()
-
-    node, ok := c.items[key]
-    if !ok {
-        return
-    }
-
-    c.removeNode(node)
-    delete(c.items, key)
-    c.used -= node.size
+	c.removeNode(node)
+	delete(c.items, key)
+	c.used -= node.size
 }
 
 func (c *Cache) DeleteWithPrefix(prefix string) {
-    c.mu.Lock()
-    defer c.mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-    for k, node := range c.items {
-        if k == prefix || strings.HasPrefix(k, prefix+"?") {
-            c.removeNode(node)
-            delete(c.items, k)
-            c.used -= node.size
-        }
-    }
+	for k, node := range c.items {
+		if k == prefix || strings.HasPrefix(k, prefix+"?") {
+			c.removeNode(node)
+			delete(c.items, k)
+			c.used -= node.size
+		}
+	}
 }
 
-
-
-
-func (c *Cache) Used() int64 { 
-    c.mu.RLock()
+func (c *Cache) Used() int64 {
+	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.used
 }
 
 func (c *Cache) Len() int {
-    c.mu.RLock()
-    defer c.mu.RUnlock()
-    return len(c.items)
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.items)
 }
 
+func (c *Cache) GetWithStale(key string) ([]byte, string, ItemState) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
+	node, ok := c.items[key]
 
+	if !ok {
+		return nil, "", StateMiss
+	}
+
+	age := time.Since(node.createdAt)
+
+	if age <= c.ttl {
+
+		c.moveToFront(node)
+		return node.value, node.etag, StateFresh
+	}
+
+	if age <= c.ttl+c.staleDuration {
+		c.moveToFront(node)
+		return node.value, node.etag, StateStale
+	}
+
+	c.removeNode(node)
+	delete(c.items, key)
+	c.used -= node.size
+	return nil, "", StateMiss
+
+}
+
+func (c *Cache) Get(key string) ([]byte, string, bool) {
+	val, etag, state := c.GetWithStale(key)
+
+	return val, etag, state == StateFresh
+}

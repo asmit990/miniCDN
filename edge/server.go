@@ -20,7 +20,7 @@ type Server struct {
 }
 
 func NewServer(cfg Config) *Server {
-	c := cache.NewCache(cfg.CacheSize, 5*time.Minute)
+	c := cache.NewCache(cfg.CacheSize, cfg.CacheTTL, cfg.StaleDuration)
 	invalidation.StartSubscriber(cfg.RedisURL, c)
 
 	return &Server{
@@ -60,19 +60,36 @@ func (s *Server) handleGetFile(w http.ResponseWriter, r *http.Request) {
 
 	acceptsGzip := strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
 
-	// cache hit
-	if data, etag, ok := s.cache.Get(cacheKey); ok {
-		log.Printf("HIT  %s | reqID=%s", cacheKey, requestId)
+	// cache lookup (fresh or stale)
+	if data, etag, state := s.cache.GetWithStale(cacheKey); state != cache.StateMiss {
+		if state == cache.StateStale {
+			log.Printf("STALE %s | reqID=%s (triggering background revalidation)", cacheKey, requestId)
+			w.Header().Set("X-Cache", "STALE")
+
+			// Asynchronous background revalidation without blocking client response
+			go func() {
+				freshData, err := origin.Fetch(s.config.OriginURL, rawKey, version)
+				if err == nil {
+					s.cache.Set(cacheKey, freshData)
+					log.Printf("REVALIDATED %s successfully in background", cacheKey)
+				} else {
+					log.Printf("REVALIDATION failed for %s: %v", cacheKey, err)
+				}
+			}()
+		} else {
+			log.Printf("HIT  %s | reqID=%s", cacheKey, requestId)
+			w.Header().Set("X-Cache", "HIT")
+		}
+
 		metrics.RecordHit()
 		metrics.CacheSizeBytes.Set(float64(s.cache.Used()))
 
-		w.Header().Set("X-Cache", "HIT")
 		w.Header().Set("ETag", etag)
 		if version != "" {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 			w.Header().Set("X-Version", version)
 		} else {
-			w.Header().Set("Cache-Control", "public, max-age=3600")
+			w.Header().Set("Cache-Control", "public, max-age=3600, stale-while-revalidate=60")
 			w.Header().Set("X-Version", "latest")
 		}
 
