@@ -279,9 +279,64 @@ sequenceDiagram
     end
     Note over Edge: Cache Warmup Complete (0 cold start misses for hot files)
 
-
 ```
 
+## Stale-While-Revalidate Lifecycle (RFC 5861)
+
+``` mermaid
+sequenceDiagram
+    autonumber
+    actor Client as User / Browser
+    participant Edge as Edge Node (Go)
+    participant LRU as In-Memory LRU Cache
+    participant Origin as Origin Server (:3000)
+
+    Note over Client,Edge: Asset age: TTL < age <= TTL + StaleDuration (Within Stale Window)
+    Client->>Edge: GET /file/bundle.js
+    Edge->>LRU: GetWithStale("bundle.js")
+    LRU-->>Edge: Stale Data, ETag, StateStale
+
+    Note over Edge,Client: Zero user latency (immediate sub-millisecond response)
+    Edge-->>Client: 200 OK (X-Cache: STALE, Cache-Control: stale-while-revalidate=60)
+
+    par Background Revalidation (Non-Blocking Goroutine)
+        Edge->>Origin: Singleflight GET /origin/bundle.js
+        Origin-->>Edge: Fresh Binary Data
+        Edge->>LRU: cache.Set("bundle.js", freshData)
+        Note over LRU: Cache refreshed & TTL reset for subsequent users
+    end
+```
+
+## Instant Version Rollback Lifecycle
+
+``` mermaid
+sequenceDiagram
+    autonumber
+    actor Admin as Admin / Deployer
+    participant Origin as Origin Server (:3000)
+    participant MinIO as MinIO Storage (:9000)
+    participant Redis as Redis (:6379)
+    participant Edge as Edge Nodes (Mumbai, London, NYC)
+
+    Admin->>Origin: POST /admin/rollback/app.js?v=1
+    Origin->>Redis: LINDEX versions:app.js (version 1)
+    Redis-->>Origin: timestamp "1788535528543"
+    
+    Origin->>MinIO: GET app.js.v.1788535528543 (read historical snapshot)
+    MinIO-->>Origin: Snapshot Binary Buffer
+
+    Origin->>MinIO: 1. Put active "app.js" (restored content)
+    Origin->>MinIO: 2. Put snapshot "app.js.v.<new_timestamp>"
+    Origin->>Redis: 3. RPUSH versions:app.js <new_timestamp>
+    Origin->>Redis: 4. PUBLISH cdn:invalidation {"key": "app.js", "action": "PURGE"}
+
+    par Edge Invalidation Broadcast (~5ms)
+        Redis-->>Edge: Broadcast PURGE "app.js"
+        Edge->>Edge: cache.Delete("app.js")
+    end
+
+    Origin-->>Admin: 200 OK { success: true, rolledBackToVersion: 1 }
+```
 
 ## Tech Stack
 
