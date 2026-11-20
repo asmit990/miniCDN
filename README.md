@@ -170,15 +170,22 @@ sequenceDiagram
     Client->>GW: GET /images/cat.png (If-None-Match: "etag123")
     GW->>Edge: Route to nearest PoP (X-Request-ID attached)
 
-    alt Cache Hit (In Edge LRU)
+    alt Cache Fresh (age <= TTL)
         Edge->>Edge: Check LRU Cache & TTL Expiry
         alt ETag matches (If-None-Match)
             Edge-->>Client: 304 Not Modified
-        else Content changed or fresh
+        else Content fresh
             Edge->>Edge: Gzip Compress (if Accept-Encoding: gzip)
             Edge-->>Client: 200 OK (X-Cache: HIT)
         end
-    else Cache Miss
+    else Cache Stale (TTL < age <= TTL + StaleDuration)
+        Edge-->>Client: 200 OK (X-Cache: STALE) [Sub-millisecond response]
+        par Background Async Revalidation
+            Edge->>Origin: Singleflight GET /origin/cat.png
+            Origin-->>Edge: Fresh Binary Data
+            Edge->>Edge: Update LRU with fresh data & reset TTL
+        end
+    else Cache Miss (not in cache or expired beyond stale window)
         Edge->>Edge: Singleflight (collapse duplicate concurrent requests)
         Edge->>Edge: Check Circuit Breaker State (Closed / Open / Half-Open)
         
@@ -295,13 +302,18 @@ sequenceDiagram
 ## Features
 
 - **Hand-rolled LRU Cache** — HashMap + Doubly Linked List, every operation O(1)
+- **Stale-While-Revalidate (RFC 5861)** — Serves stale content in 0ms while asynchronously refreshing fresh content from Origin in the background
+- **Instant Version Rollback** — `/admin/rollback/:file?v=N` rolls back active assets to any snapshot and invalidates all edge nodes in ~5ms
 - **3 Edge Nodes** — Mumbai, London, NYC with shared-nothing architecture
-- **Singleflight** — 1000 concurrent cache misses = exactly 1 origin request
-- **Cache Invalidation** — Redis Pub/Sub PURGE events, ~5ms propagation to all edges
-- **Health Checks** — Gateway polls every 5s, auto-failover to next nearest edge
+- **Singleflight** — Collapses concurrent cache misses and background revalidations into exactly 1 origin request
+- **Circuit Breaker** — Trips Open on upstream origin failures to prevent cascading latency spikes
+- **ETag & 304 Not Modified** — Automatic MD5 ETag hashing and conditional validation for client-side bandwidth savings
+- **Gzip Compression** — Dynamic compression for text, JSON, HTML, CSS, JS, and SVG payloads
+- **Cache Invalidation** — Redis Pub/Sub PURGE & DELETE events, ~5ms propagation to all edges
+- **Health Checks & Failover** — Gateway polls every 5s, auto-failover across fallback chain (`IN` $\to$ `GB` $\to$ `US`)
 - **Fault Tolerance** — Edge dies? Rerouted. Redis dies? Cache still works. Origin dies? Cached files still served.
-- **Prometheus Metrics** — hit rate, p95/p99 latency, evictions, memory per edge
-- **Rate Limiting** — 100 requests/minute per IP at gateway level
+- **Prometheus Metrics** — Hit rate, P95/P99 latency, evictions, active connections, memory per edge
+- **Rate Limiting** — Configurable sliding-window rate limiting per IP at the gateway level
 
 ---
 
@@ -365,9 +377,9 @@ mini-cdn/
 ### Run Everything
 
 ```bash
-git clone https://github.com/yourusername/mini-cdn
-cd mini-cdn
-docker compose up --build
+git clone https://github.com/asmit990/miniCDN.git
+cd miniCDN
+docker compose up -d
 ```
 
 ### Services
@@ -411,23 +423,38 @@ curl -H "X-Region: US" http://localhost:8080/file/cat.png
 curl -H "X-Region: IN" http://localhost:8080/file/cat.png?v=1
 ```
 
-### Watch cache hit/miss
+### Rollback to previous version
 ```bash
-# first request — cache miss
-curl -v http://localhost:8080/file/cat.png
-# X-Cache: MISS
+# Instantly restore cat.png to version 1 and broadcast purge to all edges
+curl -X POST "http://localhost:3000/admin/rollback/cat.png?v=1"
 
-# second request — cache hit
-curl -v http://localhost:8080/file/cat.png
-# X-Cache: HIT
+# response
+{
+  "success": true,
+  "message": "Successfully rolled back cat.png to version 1",
+  "file": "cat.png",
+  "rolledBackToVersion": 1,
+  "newVersionTimestamp": "1795153135085"
+}
+```
 
-# upload new version
+### Watch cache states (MISS → HIT → STALE)
+```bash
+# 1. First request — cache miss (fetches from origin)
+curl -v http://localhost:8080/file/cat.png
+# Header: X-Cache: MISS
+
+# 2. Second request — cache hit (served from edge RAM in <1ms)
+curl -v http://localhost:8080/file/cat.png
+# Header: X-Cache: HIT
+
+# 3. Request after TTL expires (during stale window)
+curl -v http://localhost:8080/file/cat.png
+# Header: X-Cache: STALE (served instantly while background goroutine refreshes from Origin)
+
+# 4. Upload new version or Rollback
 curl -X POST http://localhost:3000/upload -F "file=@new_cat.png"
-# PURGE published → all edges invalidated
-
-# next request — cache miss again (fresh version)
-curl -v http://localhost:8080/file/cat.png
-# X-Cache: MISS
+# Redis Pub/Sub PURGE published → invalidated across all 3 edges in ~5ms
 ```
 
 ### View metrics
@@ -442,77 +469,46 @@ cdn_cache_size_bytes 486539264
 cdn_evictions_total 3
 ```
 
-### Run integration tests
-
-Start the stack, then run the end-to-end suite:
-
-```bash
-docker compose up --build -d
-./scripts/integration_test.sh
-```
-
-The suite verifies cache MISS → HIT behavior, Redis invalidation after an overwrite on every edge, gateway failover when Mumbai is stopped, and that 50 concurrent misses result in one origin request.
-
----
-
-## How Cache Invalidation Works
-
-```
-Admin uploads new cat.png
-        ↓
-Origin stores in MinIO
-        ↓
-Origin publishes to Redis:
-{ "type": "PURGE", "key": "cat.png" }
-        ↓
-Redis broadcasts to all edges
-        ↓
-Mumbai → cache.Delete("cat.png")
-London → cache.Delete("cat.png")
-NYC    → cache.Delete("cat.png")
-        ↓
-Next request → cache MISS → fetches fresh version
-```
-
----
-
-## Fault Tolerance
-
-| Failure | What Happens |
-|---------|-------------|
-| Edge dies | Gateway detects via health check, reroutes to next nearest edge |
-| Redis dies | Cache still works, invalidation paused, TTL acts as safety net |
-| Origin dies | Cached files still served to millions of users |
-| All edges die | Gateway returns 502 gracefully |
-
----
-
-## LRU Cache Implementation
-
-```
-HashMap + Doubly Linked List
-
-HEAD ←→ [most recent] ←→ ... ←→ [least recent] ←→ TAIL
-
-GET:  HashMap lookup → move node to HEAD         O(1)
-SET:  Insert at HEAD → evict TAIL if over cap    O(1)
-DEL:  HashMap lookup → unlink node               O(1)
-```
-
 ---
 
 ## Running Tests
 
+### 1. Unit Tests (Go)
 ```bash
-# LRU cache unit tests
 cd edge
-go test ./cache/... -v
+go test -v ./...
+```
+Tests:
+- **`cache`**: LRU order, capacity evictions, TTL expirations, prefix purging, `stale-while-revalidate` state transitions (`StateFresh` $\to$ `StateStale` $\to$ `StateMiss`).
+- **`origin`**: Circuit breaker state machine (Closed $\to$ Open $\to$ HalfOpen), failure threshold trips, origin HTTP fetcher with versions.
+- **`compression`**: Dynamic MIME-type compressibility checks and Gzip decompression integrity.
 
-# load test
-./scripts/load_test.sh
+### 2. End-to-End Integration Tests
+Run the entire cluster and execute the complete test suite:
 
-# invalidation test
+```bash
+docker compose up -d
+
+./scripts/integration_test.sh && \
+./scripts/test_versioning.sh && \
+./scripts/test_hit.sh && \
+./scripts/test_miss.sh && \
 ./scripts/test_invalidation.sh
+```
+
+| Script | What It Tests |
+|---|---|
+| `integration_test.sh` | MISS $\to$ HIT, cross-edge invalidation, Gateway failover (Mumbai $\to$ London fallback), singleflight under 50 concurrent requests (1 origin fetch). |
+| `test_versioning.sh` | Multi-version uploads, unversioned vs versioned cache isolation (`?v=1`), snapshot storage, version rollback, and purge cleanup. |
+| `test_hit.sh` | Cache warming, sub-millisecond response validation, and byte payload integrity. |
+| `test_miss.sh` | 404 response handling for non-existent assets and initial cache MISS headers. |
+| `test_invalidation.sh` | Cache priming across all 3 PoPs (8081, 8082, 8083), file update triggering Redis Pub/Sub, and synchronized edge eviction. |
+
+### 3. Load & Performance Benchmarks (k6)
+```bash
+./scripts/load_test.sh --quick    # Quick benchmark (~8s)
+./scripts/load_test.sh            # Standard benchmark (~22s)
+./scripts/load_test.sh --stress   # High concurrency stress test
 ```
 
 ---
