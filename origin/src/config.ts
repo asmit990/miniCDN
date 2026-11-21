@@ -15,6 +15,7 @@ const config = {
     host: process.env.REDIS_HOST || "localhost",
     port: parseInt(process.env.REDIS_PORT || "6379"),
   },
+  signingSecret: process.env.CDN_SIGNING_SECRET || "supersecretkey123",
 }
 
 export default config

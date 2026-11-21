@@ -56,6 +56,7 @@ services:
       REDIS_PORT: 6379
       TEST_MODE: "true"
       TEST_ORIGIN_FETCH_DELAY_MS: "200"
+      CDN_SIGNING_SECRET: supersecretkey123
     depends_on:
       - redis
       - minio
@@ -75,6 +76,7 @@ services:
       PORT: ":8081"
       ORIGIN_URL: http://origin:3000
       REDIS_URL: redis:6379
+      CDN_SIGNING_SECRET: supersecretkey123
     depends_on:
       - origin
       - redis
@@ -90,6 +92,7 @@ services:
       PORT: ":8082"
       ORIGIN_URL: http://origin:3000
       REDIS_URL: redis:6379
+      CDN_SIGNING_SECRET: supersecretkey123
     depends_on:
       - origin
       - redis
@@ -105,6 +108,7 @@ services:
       PORT: ":8083"
       ORIGIN_URL: http://origin:3000
       REDIS_URL: redis:6379
+      CDN_SIGNING_SECRET: supersecretkey123
     depends_on:
       - origin
       - redis
@@ -125,6 +129,7 @@ services:
       EDGE_IN: http://edge-mumbai:8081
       EDGE_GB: http://edge-london:8082
       EDGE_US: http://edge-nyc:8083
+      CDN_SIGNING_SECRET: supersecretkey123
     depends_on:
       - edge-mumbai
       - edge-london

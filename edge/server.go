@@ -5,6 +5,7 @@ import (
 	"edge/invalidation"
 	"edge/metrics"
 	"edge/origin"
+	"edge/signing"
 	"fmt"
 	"log"
 	"net/http"
@@ -15,24 +16,40 @@ import (
 )
 
 type Server struct {
-	cache  *cache.Cache
-	config Config
+	cache     *cache.Cache
+	config    Config
+	validator *signing.Validator
+	mux       *http.ServeMux
 }
 
 func NewServer(cfg Config) *Server {
 	c := cache.NewCache(cfg.CacheSize, cfg.CacheTTL, cfg.StaleDuration)
 	invalidation.StartSubscriber(cfg.RedisURL, c)
 
-	return &Server{
-		cache:  c,
-		config: cfg,
+	var v *signing.Validator
+	if cfg.SigningSecret != "" {
+		v = signing.NewValidator(cfg.SigningSecret)
 	}
+
+	mux := http.NewServeMux()
+	s := &Server{
+		cache:     c,
+		config:    cfg,
+		validator: v,
+		mux:       mux,
+	}
+	s.routes()
+	return s
 }
 
 func (s *Server) routes() {
-	http.HandleFunc("/file/", s.handleGetFile)
-	http.HandleFunc("/health", s.handleHealth)
-	http.Handle("/metrics", promhttp.Handler())
+	s.mux.HandleFunc("/file/", s.handleGetFile)
+	s.mux.HandleFunc("/health", s.handleHealth)
+	s.mux.Handle("/metrics", promhttp.Handler())
+}
+
+func (s *Server) Handler() http.Handler {
+	return s.mux
 }
 
 func (s *Server) handleGetFile(w http.ResponseWriter, r *http.Request) {
@@ -51,6 +68,25 @@ func (s *Server) handleGetFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing file key", http.StatusBadRequest)
 		return
 	}
+
+	// Signed URL validation — only triggered when token query param is present
+	tokenParam := r.URL.Query().Get("token")
+	expiresParam := r.URL.Query().Get("expires")
+	signedRequest := false
+	if tokenParam != "" {
+		if s.validator == nil {
+			http.Error(w, "token validation not configured", http.StatusForbidden)
+			return
+		}
+		if !s.validator.Validate(rawKey, tokenParam, expiresParam) {
+			http.Error(w, "invalid or expired signed URL", http.StatusForbidden)
+			return
+		}
+		signedRequest = true
+		w.Header().Set("X-Signed", "true")
+		w.Header().Set("X-Signed-Expires", expiresParam)
+	}
+	_ = signedRequest // suppress unused warning if not referenced later
 
 	version := r.URL.Query().Get("v")
 	cacheKey := rawKey

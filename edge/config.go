@@ -13,6 +13,7 @@ type Config struct {
 	RedisURL      string
 	CacheTTL      time.Duration
 	StaleDuration time.Duration
+	SigningSecret  string
 }
 
 func DefaultConfig() Config {
@@ -45,6 +46,8 @@ func DefaultConfig() Config {
 		}
 	}
 
+	signingSecret := os.Getenv("CDN_SIGNING_SECRET")
+
 	return Config{
 		Port:          port,
 		CacheSize:     500 * 1024 * 1024,
@@ -52,5 +55,6 @@ func DefaultConfig() Config {
 		RedisURL:      redisURL,
 		CacheTTL:      time.Duration(ttlSeconds) * time.Second,
 		StaleDuration: time.Duration(staleSeconds) * time.Second,
+		SigningSecret:  signingSecret,
 	}
 }
